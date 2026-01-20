@@ -22,7 +22,7 @@ export const aircraftSeatMap: Record<string, number> = {
   CRJ2: 50,
 
   // If unknown
-  UNK: 150,
+  UNK: 100,
 };
 
 export function estimatePassengers(aircraftType?: string | null, loadFactor = 0.82) {
