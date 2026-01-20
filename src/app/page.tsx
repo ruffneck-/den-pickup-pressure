@@ -1,65 +1,106 @@
-import Image from "next/image";
+// src/app/page.tsx
+"use client";
+
+import { useEffect, useState } from "react";
+
+type ApiPayload = {
+  generated_at: string;
+  demand: { pax_next_60m: number; flights_next_60m: number; demand_score: number };
+  buckets: Array<{ bucketStartISO: string; estimatedPickupPax: number; flights: number }>;
+  flights: Array<{ ident: string; operator: string | null; origin: string | null; aircraft_type: string | null; estimated_on: string; pax: number; status: string | null }>;
+};
 
 export default function Home() {
+  const [data, setData] = useState<ApiPayload | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    setErr(null);
+    const res = await fetch("/api/den", { cache: "no-store" });
+    if (!res.ok) {
+      setErr(`API error ${res.status}`);
+      return;
+    }
+    setData(await res.json());
+  }
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, []);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="min-h-screen p-4 max-w-xl mx-auto">
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold">DEN Pickup Pressure</h1>
+        <button
+          className="px-3 py-2 rounded-xl border text-sm"
+          onClick={load}
+        >
+          Refresh
+        </button>
+      </div>
+
+      {err && <p className="mt-4 text-red-600">{err}</p>}
+      {!data && !err && <p className="mt-4">Loading…</p>}
+
+      {data && (
+        <>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <Stat label="Demand score" value={data.demand.demand_score} big />
+            <Stat label="Pax (next 60m)" value={data.demand.pax_next_60m} />
+            <Stat label="Flights (next 60m)" value={data.demand.flights_next_60m} />
+          </div>
+
+          <p className="mt-3 text-xs opacity-70">
+            Updated {new Date(data.generated_at).toLocaleTimeString()}
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+
+          <h2 className="mt-6 text-lg font-semibold">Next 2 hours (15-min buckets)</h2>
+          <div className="mt-2 space-y-2">
+            {data.buckets.map((b) => (
+              <div key={b.bucketStartISO} className="rounded-2xl border p-3">
+                <div className="flex justify-between">
+                  <div className="font-medium">
+                    {new Date(b.bucketStartISO).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                  <div className="text-sm opacity-70">{b.flights ? `${b.flights} flights` : ""}</div>
+                </div>
+                <div className="mt-2 text-2xl font-bold">{b.estimatedPickupPax} pax</div>
+              </div>
+            ))}
+            {data.buckets.length === 0 && <p className="opacity-70">No buckets in horizon.</p>}
+          </div>
+
+          <h2 className="mt-6 text-lg font-semibold">Arrivals list</h2>
+          <div className="mt-2 space-y-2">
+            {data.flights.slice(0, 25).map((f) => (
+              <div key={f.ident + f.estimated_on} className="rounded-2xl border p-3">
+                <div className="flex justify-between gap-2">
+                  <div className="font-semibold">{f.operator ?? "?"} {f.ident}</div>
+                  <div className="text-sm">
+                    {new Date(f.estimated_on).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                </div>
+                <div className="mt-1 text-sm opacity-80">
+                  From {f.origin ?? "?"} • {f.aircraft_type ?? "UNK"} • ~{f.pax} pax
+                </div>
+                {f.status && <div className="mt-1 text-xs opacity-60">{f.status}</div>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </main>
+  );
+}
+
+function Stat({ label, value, big }: { label: string; value: number; big?: boolean }) {
+  return (
+    <div className="rounded-2xl border p-3">
+      <div className="text-xs opacity-70">{label}</div>
+      <div className={big ? "text-3xl font-bold mt-1" : "text-xl font-bold mt-1"}>{value}</div>
     </div>
   );
 }
