@@ -1,53 +1,59 @@
 // src/app/api/den/route.ts
 import { NextResponse } from "next/server";
-import { getScheduledArrivalsKDEN } from "@/lib/aeroapi";
+import { getArrivalsToDEN } from "@/lib/aviationstack";
 import { estimatePassengers } from "@/lib/seatMap";
 import { flightsToBuckets } from "@/lib/demand";
 
-export const runtime = "nodejs"; // keep it simple for headers/env access
+export const runtime = "nodejs";
+
+function pickBestArrivalTimeISO(f: any): string | null {
+  // prefer actual, then estimated, then scheduled
+  return (
+    f?.arrival?.actual ??
+    f?.arrival?.estimated ??
+    f?.arrival?.scheduled ??
+    null
+  );
+}
 
 export async function GET() {
-  const now = new Date();
-  const start = new Date(now.getTime() - 30 * 60 * 1000); // include slightly past (delays)
-  const end = new Date(now.getTime() + 3 * 60 * 60 * 1000); // next 3 hours
+  // Aviationstack free tier can be restrictive with filters/params,
+  // so we keep it simple: arr_iata=DEN + limit.
+  const raw = await getArrivalsToDEN({ limit: 100, offset: 0 });
 
-  const flightsRaw = (await getScheduledArrivalsKDEN({
-    startISO: start.toISOString(),
-    endISO: end.toISOString(),
-    maxPages: 1,
-  })) ?? [];
+  const flights = raw
+    .map((f) => {
+      const eta = pickBestArrivalTimeISO(f);
+      const aircraftType = f?.aircraft?.iata || f?.aircraft?.icao || null;
 
-  const flights = flightsRaw
-    .filter(f => !f.cancelled && !f.diverted)
-    .map(f => {
-      const pax = estimatePassengers(f.aircraft_type, 0.82);
-      const eta = f.estimated_on || f.scheduled_on || null;
+      const pax = estimatePassengers(aircraftType, 0.82);
+
       return {
-        ident: f.ident,
-        operator: f.operator_iata || f.operator || null,
-        origin: f.origin?.code_iata || f.origin?.code || null,
-        aircraft_type: f.aircraft_type || null,
+        ident: f?.flight?.iata || f?.flight?.icao || f?.flight?.number || "UNKNOWN",
+        operator: f?.airline?.iata || f?.airline?.name || null,
+        origin: f?.departure?.iata || f?.departure?.icao || null,
+        aircraft_type: aircraftType,
         estimated_on: eta,
-        arrival_delay_sec: f.arrival_delay ?? null,
-        status: f.status ?? null,
+        status: f?.flight_status || null,
         pax,
       };
     })
-    .filter(f => !!f.estimated_on);
+    .filter((x) => !!x.estimated_on);
 
   const buckets = flightsToBuckets({ flights, horizonMinutes: 120, bucketMinutes: 15 });
 
-  // Simple “Demand Score”: pax hitting pickup in next 60 min, scaled a bit for bunching
   const nowMs = Date.now();
   const sixtyMs = 60 * 60 * 1000;
+
   const pax60 = buckets
-    .filter(b => {
+    .filter((b) => {
       const t = new Date(b.bucketStartISO).getTime();
       return t >= nowMs && t < nowMs + sixtyMs;
     })
     .reduce((sum, b) => sum + b.estimatedPickupPax, 0);
 
-  const flights60 = flights.filter(f => {
+  const flights60 = flights.filter((f) => {
+    // peak pickup is ~+35m from arrival time per our model
     const wavePeak = new Date(f.estimated_on!).getTime() + 35 * 60 * 1000;
     return wavePeak >= nowMs && wavePeak < nowMs + sixtyMs;
   }).length;
@@ -56,7 +62,7 @@ export async function GET() {
 
   return NextResponse.json({
     generated_at: new Date().toISOString(),
-    window: { start: start.toISOString(), end: end.toISOString() },
+    provider: "aviationstack",
     demand: { pax_next_60m: pax60, flights_next_60m: flights60, demand_score: demandScore },
     buckets,
     flights,
